@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Подпись</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #f2f2f4);
+    --text: var(--tg-theme-text-color, #111);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --btn: var(--tg-theme-button-color, #2a7de1);
+    --btn-text: var(--tg-theme-button-text-color, #fff);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+  .wrap { display: flex; flex-direction: column; height: 100%; padding: 14px 16px 16px; gap: 12px; }
+  h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  .name { color: var(--hint); font-size: 15px; margin-top: 2px; }
+  .pad { position: relative; flex: 1; min-height: 220px; background: #fff; border-radius: 14px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.12) inset; overflow: hidden; touch-action: none; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  .line { position: absolute; left: 22px; right: 22px; bottom: 30%; border-bottom: 1.5px dashed #b9b9bf; pointer-events: none; }
+  .cross { position: absolute; left: 20px; bottom: calc(30% + 6px); color: #b9b9bf; font-size: 22px; pointer-events: none; }
+  .hint { position: absolute; left: 0; right: 0; top: 38%; text-align: center; color: #b0b0b6;
+    font-size: 17px; pointer-events: none; transition: opacity .2s; }
+  .row { display: flex; gap: 10px; }
+  button { flex: 1; height: 50px; border: 0; border-radius: 12px; font-size: 17px; font-weight: 600; cursor: pointer; }
+  .clear { background: rgba(127,127,127,.16); color: var(--text); }
+  .ok { background: var(--btn); color: var(--btn-text); }
+  button:disabled { opacity: .45; }
+  .note { color: var(--hint); font-size: 13px; text-align: center; min-height: 17px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1 id="title">Подпись</h1>
+    <div class="name" id="name"></div>
+  </div>
+  <div class="pad" id="pad">
+    <div class="line"></div><div class="cross">×</div>
+    <div class="hint" id="hint">Распишитесь пальцем здесь</div>
+    <canvas id="c"></canvas>
+  </div>
+  <div class="row">
+    <button class="clear" id="clear" type="button">Очистить</button>
+    <button class="ok" id="ok" type="button" disabled>Готово</button>
+  </div>
+  <div class="note" id="note"></div>
+</div>
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var q = new URLSearchParams(location.search);
+  document.getElementById("title").textContent = q.get("who") || "Подпись";
+  document.getElementById("name").textContent = q.get("name") || "";
+
+  if (tg) {
+    tg.ready(); tg.expand();
+    try { tg.disableVerticalSwipes && tg.disableVerticalSwipes(); } catch (e) {}
+  }
+  var note = document.getElementById("note");
+  if (!tg || !tg.initData && !tg.sendData) {
+    note.textContent = "Откройте эту страницу кнопкой «Подписать» в боте.";
+  }
+
+  var canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+  var hint = document.getElementById("hint"), okBtn = document.getElementById("ok");
+  var strokes = [], cur = null, dpr = 1, W = 0, H = 0;
+
+  function resize() {
+    var r = canvas.getBoundingClientRect();
+    dpr = window.devicePixelRatio || 1; W = r.width; H = r.height;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    redraw();
+  }
+  function style() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = 3; ctx.strokeStyle = "#14298c"; ctx.fillStyle = "#14298c";
+  }
+  function drawStroke(s) {
+    if (s.length === 1) { ctx.beginPath(); ctx.arc(s[0][0], s[0][1], 1.6, 0, 7); ctx.fill(); return; }
+    ctx.beginPath(); ctx.moveTo(s[0][0], s[0][1]);
+    for (var i = 1; i < s.length; i++) ctx.lineTo(s[i][0], s[i][1]);
+    ctx.stroke();
+  }
+  function redraw() { ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0, 0, canvas.width, canvas.height); style(); strokes.forEach(drawStroke); }
+  function pos(e) { var r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+
+  canvas.addEventListener("pointerdown", function (e) {
+    e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+    cur = [pos(e)]; strokes.push(cur); hint.style.opacity = 0; style(); drawStroke(cur); update();
+  });
+  canvas.addEventListener("pointermove", function (e) {
+    if (!cur) return; e.preventDefault();
+    var evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (var i = 0; i < evs.length; i++) {
+      var p = pos(evs[i]), last = cur[cur.length - 1];
+      ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+      cur.push(p);
+    }
+  });
+  function end() { cur = null; update(); }
+  canvas.addEventListener("pointerup", end); canvas.addEventListener("pointercancel", end);
+  document.addEventListener("touchmove", function (e) { if (e.target === canvas) e.preventDefault(); }, { passive: false });
+
+  document.getElementById("clear").onclick = function () { strokes = []; hint.style.opacity = 1; redraw(); update(); };
+
+  function inkLength() {
+    var L = 0; strokes.forEach(function (s) { for (var i = 1; i < s.length; i++) L += Math.hypot(s[i][0]-s[i-1][0], s[i][1]-s[i-1][1]); });
+    return L;
+  }
+  function update() {
+    var ok = inkLength() > 60;
+    okBtn.disabled = !ok;
+    if (tg && tg.MainButton) {
+      if (ok) { tg.MainButton.setText("Подписать"); tg.MainButton.show(); } else tg.MainButton.hide();
+    }
+  }
+
+  // Упрощение линии (Рамер — Дуглас — Пекер)
+  function rdp(pts, eps) {
+    if (pts.length < 3) return pts.slice();
+    var a = pts[0], b = pts[pts.length - 1], dmax = 0, idx = 0;
+    var dx = b[0]-a[0], dy = b[1]-a[1], len = Math.hypot(dx, dy) || 1e-9;
+    for (var i = 1; i < pts.length - 1; i++) {
+      var d = Math.abs(dy*pts[i][0] - dx*pts[i][1] + b[0]*a[1] - b[1]*a[0]) / len;
+      if (d > dmax) { dmax = d; idx = i; }
+    }
+    if (dmax > eps) { var l = rdp(pts.slice(0, idx + 1), eps), r = rdp(pts.slice(idx), eps); return l.slice(0, -1).concat(r); }
+    return [a, b];
+  }
+  var A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  function c2(v) { v = Math.max(0, Math.min(4095, Math.round(v))); return A[(v >> 6) & 63] + A[v & 63]; }
+  function encode(eps) {
+    var k = 4095 / Math.max(W, H, 1);
+    return "S1:" + strokes.map(function (s) {
+      return rdp(s, eps).map(function (p) { return c2(p[0]*k) + c2(p[1]*k); }).join("");
+    }).join("~");
+  }
+  function submit() {
+    if (okBtn.disabled) return;
+    var eps = 0.6, data = encode(eps);
+    while (data.length > 4000 && eps < 12) { eps *= 1.5; data = encode(eps); }
+    if (data.length > 4000) { note.textContent = "Подпись слишком сложная — очистите и распишитесь проще."; return; }
+    if (tg && tg.sendData) { tg.sendData(data); }
+    else { note.textContent = "Готово, но страница открыта не из бота — подпись не отправлена."; }
+  }
+  okBtn.onclick = submit;
+  if (tg && tg.MainButton) tg.MainButton.onClick(submit);
+
+  window.addEventListener("resize", function () { var old = strokes; resize(); strokes = old; redraw(); });
+  resize(); update();
+})();
+</script>
+</body>
+</html>
